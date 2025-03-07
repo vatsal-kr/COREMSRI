@@ -1,36 +1,37 @@
-import os
-import tempfile
-import subprocess
-from pathlib import Path
 import copy
+import logging
+import os
 import re
-
-from tree_sitter import Language, Parser
+import subprocess
+import tempfile
+from collections import namedtuple
+from pathlib import Path
 
 import tiktoken
+import tree_sitter_java as tsj
+import tree_sitter_python as tsp
 from jinja2 import Environment
-from collections import namedtuple
-import logging
-
+from tree_sitter import Language, Parser
 
 __FILE_PATH = Path(__file__).resolve()
 __FILE_DIR = __FILE_PATH.parent
 
-Language.build_library(
-    str(__FILE_DIR / "build/my-languages.so"),
-    [
-        str(__FILE_DIR / "tree-sitter-python"),
-        str(__FILE_DIR / "tree-sitter-java"),
-    ],
-)
+# Language.build_library(
+#     str(__FILE_DIR / "build/my-languages.so"),
+#     [
+#         str(__FILE_DIR / "tree-sitter-python"),
+#         str(__FILE_DIR / "tree-sitter-java"),
+#     ],
+# )
+# python_parser = Parser()
+# python_parser.set_language(Language(str(__FILE_DIR / "build/my-languages.so"), "python"))
 
-python_parser = Parser()
-python_parser.set_language(
-    Language(str(__FILE_DIR / "build/my-languages.so"), "python")
-)
-
-java_parser = Parser()
-java_parser.set_language(Language(str(__FILE_DIR / "build/my-languages.so"), "java"))
+# java_parser = Parser()
+# java_parser.set_language(Language(str(__FILE_DIR / "build/my-languages.so"), "java"))
+PY_LANGUAGE = Language(tsp.language())
+JAVA_LANGUAGE = Language(tsj.language())
+python_parser = Parser(PY_LANGUAGE)
+java_parser = Parser(JAVA_LANGUAGE)
 
 
 TOKENIZER_MODEL_ALIAS_MAP = {
@@ -117,10 +118,7 @@ def split_python_file(content, line_of_interest, token_counter, chunk_lim, buffe
     get_class_blocks(root_node)
     required_class_node = None
     for class_node in all_class_nodes:
-        if (
-            line_of_interest >= class_node.start_point[0]
-            and line_of_interest <= class_node.end_point[0]
-        ):
+        if line_of_interest >= class_node.start_point[0] and line_of_interest <= class_node.end_point[0]:
             required_class_node = class_node
             break
 
@@ -130,16 +128,8 @@ def split_python_file(content, line_of_interest, token_counter, chunk_lim, buffe
             required_class_node.start_point[0],
             required_class_node.end_point[0],
         )
-        adjusted_line_of_interest = (
-            line_of_interest - required_class_node.start_point[0]
-        )
-        code_block = ("\n").join(
-            [
-                line
-                for i, line in enumerate(file_lines)
-                if (i >= code_block_indices[0] and i <= code_block_indices[1])
-            ]
-        )
+        adjusted_line_of_interest = line_of_interest - required_class_node.start_point[0]
+        code_block = ("\n").join([line for i, line in enumerate(file_lines) if (i >= code_block_indices[0] and i <= code_block_indices[1])])
         num_block_tokens = token_counter(code_block)
         if num_block_tokens < max_tokens_available:
             flag = "class_block"
@@ -149,10 +139,7 @@ def split_python_file(content, line_of_interest, token_counter, chunk_lim, buffe
     get_method_blocks(root_node)
     required_method_node = None
     for method_node in all_method_nodes:
-        if (
-            line_of_interest >= method_node.start_point[0]
-            and line_of_interest <= method_node.end_point[0]
-        ):
+        if line_of_interest >= method_node.start_point[0] and line_of_interest <= method_node.end_point[0]:
             required_method_node = method_node
             break
 
@@ -162,25 +149,15 @@ def split_python_file(content, line_of_interest, token_counter, chunk_lim, buffe
             required_method_node.start_point[0],
             required_method_node.end_point[0],
         )
-        adjusted_line_of_interest = (
-            line_of_interest - required_method_node.start_point[0]
-        )
-        code_block = ("\n").join(
-            [
-                line
-                for i, line in enumerate(file_lines)
-                if (i >= code_block_indices[0] and i <= code_block_indices[1])
-            ]
-        )
+        adjusted_line_of_interest = line_of_interest - required_method_node.start_point[0]
+        code_block = ("\n").join([line for i, line in enumerate(file_lines) if (i >= code_block_indices[0] and i <= code_block_indices[1])])
         num_block_tokens = token_counter(code_block)
         if num_block_tokens < max_tokens_available:
             flag = "method_block"
             return code_block, adjusted_line_of_interest, code_block_indices, flag
 
     # implicitly handles `erroneous_code==True` case and where method block is too large
-    oneside_window_length = (
-        max_tokens_available // 2 - token_counter(file_lines[line_of_interest]) // 2
-    )
+    oneside_window_length = max_tokens_available // 2 - token_counter(file_lines[line_of_interest]) // 2
     code_block_index_top = line_of_interest
     code_block_index_bottom = line_of_interest
 
@@ -211,13 +188,7 @@ def split_python_file(content, line_of_interest, token_counter, chunk_lim, buffe
 
     adjusted_line_of_interest = max(line_of_interest - code_block_index_top, 0)
     code_block_indices = (code_block_index_top, code_block_index_bottom)
-    code_block = ("\n").join(
-        [
-            line
-            for i, line in enumerate(file_lines)
-            if (i >= code_block_indices[0] and i <= code_block_indices[1])
-        ]
-    )
+    code_block = ("\n").join([line for i, line in enumerate(file_lines) if (i >= code_block_indices[0] and i <= code_block_indices[1])])
     flag = "window"
     return code_block, adjusted_line_of_interest, code_block_indices, flag
 
@@ -284,10 +255,7 @@ def split_java_file(content, line_of_interest, token_counter, chunk_lim, buffer)
     get_class_blocks(root_node)
     required_class_node = None
     for class_node in all_class_nodes:
-        if (
-            line_of_interest >= class_node.start_point[0]
-            and line_of_interest <= class_node.end_point[0]
-        ):
+        if line_of_interest >= class_node.start_point[0] and line_of_interest <= class_node.end_point[0]:
             required_class_node = class_node
             break
 
@@ -297,16 +265,8 @@ def split_java_file(content, line_of_interest, token_counter, chunk_lim, buffer)
             required_class_node.start_point[0],
             required_class_node.end_point[0],
         )
-        adjusted_line_of_interest = (
-            line_of_interest - required_class_node.start_point[0]
-        )
-        code_block = ("\n").join(
-            [
-                line
-                for i, line in enumerate(file_lines)
-                if (i >= code_block_indices[0] and i <= code_block_indices[1])
-            ]
-        )
+        adjusted_line_of_interest = line_of_interest - required_class_node.start_point[0]
+        code_block = ("\n").join([line for i, line in enumerate(file_lines) if (i >= code_block_indices[0] and i <= code_block_indices[1])])
         num_block_tokens = token_counter(code_block)
         if num_block_tokens < max_tokens_available:
             flag = "class_block"
@@ -316,10 +276,7 @@ def split_java_file(content, line_of_interest, token_counter, chunk_lim, buffer)
     get_method_blocks(root_node)
     required_method_node = None
     for method_node in all_method_nodes:
-        if (
-            line_of_interest >= method_node.start_point[0]
-            and line_of_interest <= method_node.end_point[0]
-        ):
+        if line_of_interest >= method_node.start_point[0] and line_of_interest <= method_node.end_point[0]:
             required_method_node = method_node
             break
 
@@ -329,25 +286,15 @@ def split_java_file(content, line_of_interest, token_counter, chunk_lim, buffer)
             required_method_node.start_point[0],
             required_method_node.end_point[0],
         )
-        adjusted_line_of_interest = (
-            line_of_interest - required_method_node.start_point[0]
-        )
-        code_block = ("\n").join(
-            [
-                line
-                for i, line in enumerate(file_lines)
-                if (i >= code_block_indices[0] and i <= code_block_indices[1])
-            ]
-        )
+        adjusted_line_of_interest = line_of_interest - required_method_node.start_point[0]
+        code_block = ("\n").join([line for i, line in enumerate(file_lines) if (i >= code_block_indices[0] and i <= code_block_indices[1])])
         num_block_tokens = token_counter(code_block)
         if num_block_tokens < max_tokens_available:
             flag = "method_block"
             return code_block, adjusted_line_of_interest, code_block_indices, flag
 
     # implicitly handles `erroneous_code==True` case and where method block is too large
-    oneside_window_length = (
-        max_tokens_available // 2 - token_counter(file_lines[line_of_interest]) // 2
-    )
+    oneside_window_length = max_tokens_available // 2 - token_counter(file_lines[line_of_interest]) // 2
     code_block_index_top = line_of_interest
     code_block_index_bottom = line_of_interest
 
@@ -378,13 +325,7 @@ def split_java_file(content, line_of_interest, token_counter, chunk_lim, buffer)
 
     adjusted_line_of_interest = max(line_of_interest - code_block_index_top, 0)
     code_block_indices = (code_block_index_top, code_block_index_bottom)
-    code_block = ("\n").join(
-        [
-            line
-            for i, line in enumerate(file_lines)
-            if (i >= code_block_indices[0] and i <= code_block_indices[1])
-        ]
-    )
+    code_block = ("\n").join([line for i, line in enumerate(file_lines) if (i >= code_block_indices[0] and i <= code_block_indices[1])])
     flag = "window"
     return code_block, adjusted_line_of_interest, code_block_indices, flag
 
@@ -575,10 +516,7 @@ def extract_block(file_content, line_of_interest, encoding, parser, max_tokens):
     get_method_blocks(root_node)
     required_method_node = None
     for method_node in all_method_nodes:
-        if (
-            line_of_interest >= method_node.start_point[0]
-            and line_of_interest <= method_node.end_point[0]
-        ):
+        if line_of_interest >= method_node.start_point[0] and line_of_interest <= method_node.end_point[0]:
             required_method_node = method_node
             break
 
@@ -588,16 +526,8 @@ def extract_block(file_content, line_of_interest, encoding, parser, max_tokens):
             required_method_node.start_point[0],
             required_method_node.end_point[0],
         )
-        adjusted_line_of_interest = (
-            line_of_interest - required_method_node.start_point[0]
-        )
-        code_block = ("\n").join(
-            [
-                line
-                for i, line in enumerate(file_lines)
-                if (i >= code_block_indices[0] and i <= code_block_indices[1])
-            ]
-        )
+        adjusted_line_of_interest = line_of_interest - required_method_node.start_point[0]
+        code_block = ("\n").join([line for i, line in enumerate(file_lines) if (i >= code_block_indices[0] and i <= code_block_indices[1])])
         num_block_tokens = len(encoding.encode(code_block))
         if num_block_tokens < max_tokens:
             return code_block, adjusted_line_of_interest, code_block_indices
@@ -609,13 +539,7 @@ def extract_block(file_content, line_of_interest, encoding, parser, max_tokens):
         min(line_of_interest + oneside_window_length, len(file_lines)),
     )
     adjusted_line_of_interest = max(line_of_interest - oneside_window_length, 0)
-    code_block = ("\n").join(
-        [
-            line
-            for i, line in enumerate(file_lines)
-            if (i >= code_block_indices[0] and i <= code_block_indices[1])
-        ]
-    )
+    code_block = ("\n").join([line for i, line in enumerate(file_lines) if (i >= code_block_indices[0] and i <= code_block_indices[1])])
 
     return code_block, adjusted_line_of_interest, code_block_indices
 
@@ -624,15 +548,15 @@ def sanitize_llm_response(response):
     OpenAIResponse = namedtuple("OpenAIResponse", "text finish_reason success")
 
     response_str: str = response.text
-    if response_str.startswith('```python'):
-        response_str = response_str.removeprefix('```python\n')
-    if response_str.endswith('\n'):
-        response_str = response_str.removesuffix('\n')
-    if response_str.endswith('```'):
-        response_str = response_str.removesuffix('```')
+    if response_str.startswith("```python"):
+        response_str = response_str.removeprefix("```python\n")
+    if response_str.endswith("\n"):
+        response_str = response_str.removesuffix("\n")
+    if response_str.endswith("```"):
+        response_str = response_str.removesuffix("```")
 
     return OpenAIResponse(response_str, response.finish_reason, response.success)
-    
+
 
 def post_process_adjust_indentation(indentation_level, response):
     OpenAIResponse = namedtuple("OpenAIResponse", "text finish_reason success")
@@ -650,9 +574,7 @@ def post_process_adjust_indentation(indentation_level, response):
     # join the lines back into a code_block
     new_code_block = "\n".join(lines)
     # return the new code_block
-    new_response = OpenAIResponse(
-        new_code_block, response.finish_reason, response.success
-    )
+    new_response = OpenAIResponse(new_code_block, response.finish_reason, response.success)
     return new_response
 
 

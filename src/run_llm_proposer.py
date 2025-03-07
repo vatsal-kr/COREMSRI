@@ -1,29 +1,24 @@
-import os
-import pandas as pd
-import json
-from pathlib import Path
-import sys
-import copy
-import logging
-import pickle
 import argparse
+import copy
+import json
+import logging
+import os
+import pickle
+from pathlib import Path
+
+import pandas as pd
+from dotenv import load_dotenv
 from tqdm import tqdm
 
-from dotenv import load_dotenv
-load_dotenv()
-
-
 from localise import Localise
-from openai_handler import OpenAIHandler
-from prompt_handler import PromptConstructor
 from log import Log
+from openai_handler import LLMHandler, OpenAIHandler
 from patch_fixer import Patcher
-from Utils.file_handling import post_process_adjust_indentation, sanitize_llm_response
+from prompt_handler import PromptConstructor
+from Utils.file_handling import StructuredCodeSplitter, count_tokens, post_process_adjust_indentation, sanitize_llm_response
 
-from Utils.file_handling import StructuredCodeSplitter
-from Utils.file_handling import count_tokens
-
-logging.basicConfig(level=getattr(logging, "INFO"))
+load_dotenv()
+logging.basicConfig(level=getattr(logging, "WARNING"))
 
 file_extensions = {
     "python": ".py",
@@ -46,6 +41,7 @@ def fix(
     model,
     max_tokens,
     temperature,
+    max_model_len,
     stop,
     n,
     system_message,
@@ -56,12 +52,12 @@ def fix(
     queries_meta_file,
     template_file,
 ):
-
     api_key = os.environ["OPENAI_API_KEY"]
     api_base = os.environ["OPENAI_API_BASE"] if "OPENAI_API_BASE" in os.environ else None
-    api_type = os.environ['OPENAI_API_TYPE'] if "OPENAI_API_TYPE" in os.environ else 'openai'
-    api_version = os.environ["OPENAI_API_VERSION"] if "OPENAI_API_TYPE" in os.environ else None
-
+    # api_type = os.environ['OPENAI_API_TYPE'] if "OPENAI_API_TYPE" in os.environ else 'openai'
+    # api_version = os.environ["OPENAI_API_VERSION"] if "OPENAI_API_TYPE" in os.environ else None
+    api_type = "azure"
+    api_version = "2024-12-01-preview"
     # assert input args
     assert len(n) == len(temperature)
 
@@ -80,15 +76,13 @@ def fix(
     for query_id in tqdm(query_list):
         query_data = all_queries_data[query_id]
 
-        print(f"----------{query_data['name']}----------")
-        print(f"Query ID: {query_id}\nQuery_data: {query_data}")
+        logging.debug(f"----------{query_data['name']}----------")
+        logging.debug(f"Query ID: {query_id}\nQuery_data: {query_data}")
 
         query_folderName = query_data["folder_name"]
 
         query_result_file = pd.read_csv(
-            Path(result_csv_path)
-            / query_folderName
-            / f"results_{query_folderName}.csv",
+            Path(result_csv_path) / query_folderName / f"results_{query_folderName}.csv",
             names=[
                 "Vulnerability",
                 "Vulnerability Desc",
@@ -109,9 +103,9 @@ def fix(
 
         # sort files alphabetically
         file_names = []
-        print("=================================================")
-        print(os.getcwd())
-        print("=================================================")
+        logging.debug("=================================================")
+        logging.debug(os.getcwd())
+        logging.debug("=================================================")
         for file in os.listdir(Path(Exp_folder) / query_folderName):
             if file.endswith(file_extensions[lang]):
                 file_names.append(file)
@@ -150,25 +144,17 @@ def fix(
             ),
         )
 
-        print("len of file_names", len(file_names))
+        logging.debug("len of file_names", len(file_names))
         split_type_buckets = [[], [], [], [], []]
         for file_name in tqdm(file_names):
-            print(f"{'='*50}\nProcessing file: {file_name}\n{'='*50}")
-            answer_span = copy.deepcopy(
-                query_result_file[query_result_file["File"] == f"/{file_name}"][
-                    ["StartLine", "StartChar", "EndLine", "EndChar", "ErrorOutput"]
-                ]
-            )
-            answer_span_line_locs = list(
-                zip(answer_span["StartLine"], answer_span["EndLine"])
-            )
+            logging.debug(f"{'=' * 50}\nProcessing file: {file_name}\n{'=' * 50}")
+            answer_span = copy.deepcopy(query_result_file[query_result_file["File"] == f"/{file_name}"][["StartLine", "StartChar", "EndLine", "EndChar", "ErrorOutput"]])
+            answer_span_line_locs = list(zip(answer_span["StartLine"], answer_span["EndLine"]))
             # rl = namedtuple('rl', ['start_line', 'start_column', 'end_line', 'end_column', 'supporting_fact_locations'])
 
             line_of_interest_namedtuple_map = {}
             for i, row in answer_span.iterrows():
-                line_of_interest_namedtuple_map[row["StartLine"] - 1] = (
-                    Localise_obj.get_result_locations(row, "positive")
-                )
+                line_of_interest_namedtuple_map[row["StartLine"] - 1] = Localise_obj.get_result_locations(row, "positive")
 
             file_path = Path(Exp_folder / Path(f"{query_folderName}/{file_name}"))
             file_contents = file_path.read_text(encoding="utf-8")
@@ -187,19 +173,17 @@ def fix(
                 continue
 
             # logging prompt data:
-            print(f"Number of prompts: {len(all_prompts_T)}")
+            logging.debug(f"Number of prompts: {len(all_prompts_T)}")
             for i, prompt in enumerate(all_prompts_T):
-                print(f"Prompt {i}: {prompt.metadata['source_example'][1]}")
-                print(
-                    f"Prompt {i} length: {count_tokens(prompt.value, model_name=model)[0]}"
-                )
-                print(f"Prompt {i} split type: {prompt.metadata['split_type']}")
+                logging.debug(f"Prompt {i}: {prompt.metadata['source_example'][1]}")
+                logging.debug(f"Prompt {i} length: {count_tokens(prompt.value, model_name=model)[0]}")
+                logging.debug(f"Prompt {i} split type: {prompt.metadata['split_type']}")
 
             split_types = set([p.metadata["split_type"] for p in all_prompts_T])
             if "whole_file" in split_types:
                 split_type_buckets[0].append(file_name)
             elif len(split_types) == 0:
-                print(f"Prompts list is empty for file: {file_path}")
+                logging.debug(f"Prompts list is empty for file: {file_path}")
                 split_type_buckets[2].append(file_name)
             elif len(split_types) != 1:
                 split_type_buckets[3].append(file_name)
@@ -214,21 +198,19 @@ def fix(
 
             if dry_run is True:
                 for prompt in all_prompts_T:
-                    print("=" * 50)
-                    print(prompt.value)
+                    logging.debug("=" * 50)
+                    logging.debug(prompt.value)
                 continue
 
             # setting model to change temp and n over iterations
             total_generations = 0
             for n_idx, temp_idx in zip(n, temperature):
-
                 # if (overwrite is False) and (query_output_dir / Path(f'{file_name.split(".")[0]}_{total_generations + n_idx - 1}' + file_extensions[lang])).exists():
-                print("total_generations", total_generations, n_idx, temp_idx)
+                logging.debug("total_generations", total_generations, n_idx, temp_idx)
                 if (overwrite is False) and os.path.exists(
                     os.path.join(
                         query_output_dir,
-                        f'{file_name.split(".")[0]}_{total_generations + n_idx - 1}'
-                        + file_extensions[lang],
+                        f"{file_name.split('.')[0]}_{total_generations + n_idx - 1}" + file_extensions[lang],
                     )
                 ):
                     log = f"Skipping file: {file_name} -> "
@@ -237,7 +219,6 @@ def fix(
                     logging.info(log)
                     total_generations += n_idx
                     continue
-
 
                 model_config = {
                     "api_key": api_key,
@@ -250,12 +231,13 @@ def fix(
                     "retry_timeout": timeout,
                     "max_retry_attempts": max_attempts,
                     "system_message": system_message,
-                    'max_tokens': max_tokens,
+                    "max_tokens": max_tokens,
+                    "max_model_len": max_model_len,
                 }
-                print(f"Model config: {model_config}")
-                print(f"prompt_size: {count_tokens(all_prompts_T[0].value, model_name=model)[0]}")
+                logging.debug(f"Model config: {model_config}")
+                logging.debug(f"prompt_size: {count_tokens(all_prompts_T[0].value, model_name=model)[0]}")
 
-                model_handler = OpenAIHandler(config=model_config)
+                model_handler = OpenAIHandler(config=model_config) if model_config["openai"] else LLMHandler(config=model_config)
 
                 # Actually sending the prompt to OpenAI API and getting responses
                 original_responses = model_handler.get_responses([p.value for p in all_prompts_T])
@@ -265,15 +247,8 @@ def fix(
                     indentation_level = all_prompts_T[i].metadata["indentation_level"]
                     for j, response in enumerate(responses):
                         response = sanitize_llm_response(response)
-                        if (
-                            all_prompts_T[i].metadata["source_example"][4]
-                            == "method_block"
-                        ):
-                            response = (
-                                post_process_adjust_indentation(
-                                    indentation_level, response
-                                )
-                            )
+                        if all_prompts_T[i].metadata["source_example"][4] == "method_block":
+                            response = post_process_adjust_indentation(indentation_level, response)
                         post_process_responses[i][j] = response
 
                 seq_responses = list(zip(*post_process_responses))  # 3*4
@@ -281,18 +256,13 @@ def fix(
                 for i, responses in enumerate(seq_responses):
                     file_name_new = file_name.split(".")[0]
                     output_idx = str(i + total_generations)
-                    target_file_name = (
-                        f"{file_name_new}_{output_idx}" + file_extensions[lang]
-                    )
+                    target_file_name = f"{file_name_new}_{output_idx}" + file_extensions[lang]
                     target_file_path = query_output_dir / target_file_name
                     Logger = Log(query_output_log_dir, f"{target_file_name}_logs")
                     record = {
                         "File": file_name,
                         "Query": query_id,
-                        "Results": [
-                            (p.value, r, p.metadata["source_example"])
-                            for p, r in zip(all_prompts_T, responses)
-                        ],
+                        "Results": [(p.value, r, p.metadata["source_example"]) for p, r in zip(all_prompts_T, responses)],
                     }
                     Logger.create_logs(record, model_config)
 
@@ -336,9 +306,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--Index_folder", type=str, default="index_data")
-    parser.add_argument(
-        "--files_subset_pickle_name", "-s", type=str, default="files_subset_2000.pkl"
-    )
+    parser.add_argument("--files_subset_pickle_name", "-s", type=str, default="files_subset_2000.pkl")
 
     parser.add_argument("--encoding", type=str, default="UTF-8")
     parser.add_argument("--timeout", type=int, default=64)
@@ -360,8 +328,10 @@ if __name__ == "__main__":
     parser.add_argument("--min_timeout", type=int, default=20)
 
     parser.add_argument("--model", type=str, default="gpt-3.5-turbo-16k-0613")
+    parser.add_argument("--openai", action="store_true", dest="openai")
     parser.add_argument("--max_tokens", type=int, default=4000)
     parser.add_argument("--temperature", nargs="+", type=float, default=[0, 0.75, 1])
+    parser.add_argument("--max_model_len", type=float, default=None)
     parser.add_argument("--n", nargs="+", type=int, default=[1, 6, 3])
     parser.add_argument("--stop", type=str, default="```")
     parser.add_argument(
@@ -370,25 +340,19 @@ if __name__ == "__main__":
         default="""Assistant is an AI chatbot that helps developers perform code quality related tasks. In particular, it can help with modifying input code, as per the suggestions given by the developers. It should not modify the functionality of the input code in any way. It keeps the changes minimal to ensure that the warning or bug is fixed. It does not introduce any performance improvements, refactoring, rewrites of code, other than what is essential for the task.""",
     )
 
-    parser.add_argument(
-        "--experiment", type=str, default="basic"
-    )  # to replicate paper results hardcode experiment
-    parser.add_argument(
-        "--basic_template", type=str, default="templateA_lines.j2"
-    )  # adding flexibility in use of templates
+    parser.add_argument("--experiment", type=str, default="basic")  # to replicate paper results hardcode experiment
+    parser.add_argument("--basic_template", type=str, default="templateA_lines.j2")  # adding flexibility in use of templates
     parser.add_argument("--template", type=str, default="line-error")
     parser.add_argument("--dry_run", dest="dry_run", action="store_true")
     parser.add_argument("--overwrite", dest="overwrite", action="store_true")
     parser.add_argument("--language", type=str, default="python")
-    parser.add_argument(
-        "--queries_meta_file", type=str, default="metadata/python/metadata.json"
-    )
+    parser.add_argument("--queries_meta_file", type=str, default="metadata/python/metadata.json")
     parser.add_argument(
         "--template_file",
         type=str,
         default="templates/proposer_template.j2",
     )
-
+    parser.set_defaults(openai=False)
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log.upper()))
@@ -408,6 +372,7 @@ if __name__ == "__main__":
         model=args.model,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
+        max_model_len=args.max_model_len,
         stop=args.stop,
         n=args.n,
         system_message=args.system_message,

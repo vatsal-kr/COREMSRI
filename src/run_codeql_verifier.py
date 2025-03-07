@@ -1,19 +1,18 @@
 # %%
-import pickle
-from pathlib import Path
-import os
 import argparse
-import logging
-import sys
 import csv
-import re
 import json
-from tqdm import tqdm
+import logging
+import os
+import re
 import shutil
+from pathlib import Path
+
+from tqdm import tqdm
 
 from CodeQLOracle.run_oracle import LocalRunCodeQL
 
-logging.basicConfig(level=getattr(logging, "INFO"))
+logging.basicConfig(level=getattr(logging, "WARNING"))
 
 
 def add_uncompiled_files(query, query_folderName, out, csv_file):
@@ -47,7 +46,7 @@ def run_codeql(args):
 
     queries_meta_file = Path(args.queries_meta_file)
     assert os.path.exists(queries_meta_file)
-    with open(queries_meta_file, 'r', encoding='utf-8') as f:
+    with open(queries_meta_file, "r", encoding="utf-8") as f:
         query_metadata = json.load(f)
 
     LocalVerifier = LocalRunCodeQL(None, args.codeql_pack_path)
@@ -59,7 +58,7 @@ def run_codeql(args):
 
     for query in tqdm(query_list):
         query_data = query_metadata[query]
-        query_folderName = query_data['folder_name']
+        query_folderName = query_data["folder_name"]
         if Path(f"{args.codeql_db_path}/{query_folderName}").exists():
             shutil.rmtree(Path(f"{args.codeql_db_path}/{query_folderName}"))
         if Path(f"{args.codeql_result_path}/{query_folderName}").exists():
@@ -90,9 +89,7 @@ if __name__ == "__main__":
         nargs="*",  # 0 or more values expected => creates a list
         type=str,
     )
-    parser.add_argument(
-        "--queries_meta_file", type=str, default="metadata/python/metadata.json"
-    )
+    parser.add_argument("--queries_meta_file", type=str, default="metadata/python/metadata.json")
 
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log.upper()))
