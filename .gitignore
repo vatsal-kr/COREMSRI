@@ -171,3 +171,7 @@ key.txt
 experiments/
 temp/
 logs/
+**/openai_costs.csv
+**/.vscode
+dataset/
+!dataset/*.tar.gz

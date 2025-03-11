@@ -21,7 +21,7 @@ def add_uncompiled_files(query, query_folderName, out, csv_file):
     for line in out_lines:
         if len(line) > 4 and line[3] == "[WARN]":
             msg = " ".join(line[5:])
-            res = re.search(f"{query_folderName}\/.*\.py", msg)
+            res = re.search(rf"{query_folderName}/.*\.py", msg)
             if res:
                 file_path = res.group(0)
                 with open(csv_file, "a") as f:
