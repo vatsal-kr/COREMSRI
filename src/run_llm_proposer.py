@@ -1,5 +1,6 @@
 import argparse
 import copy
+import gc
 import json
 import logging
 import os
@@ -113,11 +114,6 @@ def fix(
             ],
         )
 
-        query_output_dir = Path(Target_folder) / query_folderName
-        query_output_log_dir = query_output_dir / "logs"
-        query_output_log_dir.mkdir(parents=True, exist_ok=True)
-        logging.info(f"Logging to {query_output_log_dir}")
-
         # sort files alphabetically
         file_names = []
         logging.debug("=================================================")
@@ -129,6 +125,20 @@ def fix(
 
         # sort file_names alphabetically
         file_names.sort()
+
+        # check if the outputs have already been computed
+        query_output_dir = Path(Target_folder) / query_folderName
+        if not overwrite and query_output_dir.exists():
+            total_outputs_per_file = sum(n)
+            for fname in file_names:
+                if len(list(query_output_dir.rglob(f"{fname.split('.')[0]}*{file_extensions[lang]}"))) < total_outputs_per_file:
+                    break
+            else:
+                logging.warning(f"Output directory already exists: {query_output_dir}")
+                continue
+        query_output_log_dir = query_output_dir / "logs"
+        query_output_log_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(f"Logging to {query_output_log_dir}")
 
         with open(template_file, "r") as f:
             prompt_template_text = f.read()
@@ -313,6 +323,8 @@ def fix(
             total_generations += n_idx
 
         split_type_data[query_id] = split_type_buckets
+        torch.cuda.empty_cache()
+        gc.collect()
     pickle.dump(split_type_data, open(f"{files_subset_pickle_name}", "wb"))
 
 
