@@ -7,7 +7,6 @@ from typing import NamedTuple
 
 import openai
 import pandas as pd
-import torch
 from tenacity import (
     Retrying,
     retry_if_exception_type,
@@ -17,7 +16,7 @@ from tenacity import (
     wait_exponential,
     wait_fixed,
 )
-from vllm import LLM, SamplingParams
+from vllm import SamplingParams
 
 DEFAULT_SYSTEM_MESSAGE = ""
 COST_DICT = {
@@ -57,6 +56,7 @@ class OpenAIHandler:
         self.n = config["n"] if "n" in config else 1
         self.model = config["model"] if "model" in config else "gpt-4-32k"
         self.temperature = config["temperature"] if "temperature" in config else 0.0
+        self.seed = config["seed"] if "seed" in config else 42
 
         self.max_retry_attempts = config["max_retry_attempts"] if "max_retry_attempts" in config else 8
         self.retry_timeout = config["retry_timeout"] if "retry_timeout" in config else 60
@@ -64,7 +64,7 @@ class OpenAIHandler:
         self.fixed_retry_interval = config["fixed_retry_interval"] if "fixed_retry_interval" in config else 10
         self.retry_interval = config["retry_interval"] if "retry_interval" in config else 1
         self.max_retry_interval = config["max_retry_interval"] if "max_retry_interval" in config else 60
-        self.stop = config["stop"] if "stop" in config else "```"
+        self.stop = config["stop"] if "stop" in config else None
         self.max_tokens = config["max_tokens"] if "max_tokens" in config else 4000
 
         if "exponential_backoff" in config and config["exponential_backoff"]:
@@ -112,6 +112,7 @@ class OpenAIHandler:
                                 n=self.n,
                                 temperature=self.temperature,
                                 max_tokens=self.max_tokens,
+                                seed=self.seed,
                             )
                             responses.append(
                                 [
@@ -167,28 +168,24 @@ class OpenAIHandler:
 
 
 class LLMHandler:
-    def __init__(self, config):
+    def __init__(self, config, llm):
         self.system_message = config["system_message"] if "system_message" in config else DEFAULT_SYSTEM_MESSAGE
 
         self.n = config["n"] if "n" in config else 1
         self.model = config["model"] if "model" in config else "gpt-4-32k"
         self.temperature = config["temperature"] if "temperature" in config else 0.0
+        self.seed = config["seed"] if "seed" in config else 42
 
-        self.stop = config["stop"] if "stop" in config else "```"
+        self.stop = config["stop"] if "stop" in config else None
         self.max_tokens = config["max_tokens"] if "max_tokens" in config else 4000
 
-        self.llm = LLM(
-            self.model,
-            tensor_parallel_size=torch.cuda.device_count(),
-            trust_remote_code=True,
-            max_model_len=config["max_model_len"],
-            gpu_memory_utilization=0.95,
-        )
+        self.llm = llm
         self.sampling_params = SamplingParams(
             max_tokens=self.max_tokens,
             temperature=self.temperature,
             stop=self.stop,
             n=self.n,
+            seed=self.seed,
         )
 
     def get_responses(self, prompts):
