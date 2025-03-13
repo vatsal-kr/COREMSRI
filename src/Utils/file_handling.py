@@ -10,7 +10,6 @@ from pathlib import Path
 import tiktoken
 import tree_sitter_java as tsj
 import tree_sitter_python as tsp
-from jinja2 import Environment
 from tree_sitter import Language, Parser
 
 __FILE_PATH = Path(__file__).resolve()
@@ -43,7 +42,11 @@ TOKENIZER_MODEL_ALIAS_MAP = {
 def count_tokens(input_str: str, model_name: str) -> tuple[int, tiktoken.Encoding]:
     if model_name in TOKENIZER_MODEL_ALIAS_MAP:
         model_name = TOKENIZER_MODEL_ALIAS_MAP[model_name]
-    encoding = tiktoken.encoding_for_model(model_name)
+    try:
+        encoding = tiktoken.encoding_for_model(model_name)
+    except Exception:
+        logging.info(f"{model_name} is not an openai model. using o200k_base instead.")
+        encoding = tiktoken.get_encoding("o200k_base")
     num_tokens = len(encoding.encode(input_str))
     return num_tokens, encoding
 
@@ -439,7 +442,7 @@ def get_file_diff(file_content, edited_file_content, function_context: bool = Fa
     attributes_file_path.write_text(GIT_ATTRIBUTES_FOR_LANG_SPECIFIC_DIFF)
     os.environ["XDG_CONFIG_HOME"] = str(temp_dir.name)
 
-    diff_command = f"git --no-pager diff "
+    diff_command = "git --no-pager diff "
 
     if function_context:
         diff_command += "-U0 --function-context "
@@ -547,14 +550,12 @@ def extract_block(file_content, line_of_interest, encoding, parser, max_tokens):
 def sanitize_llm_response(response):
     OpenAIResponse = namedtuple("OpenAIResponse", "text finish_reason success")
 
-    response_str: str = response.text
-    if response_str.startswith("```python"):
-        response_str = response_str.removeprefix("```python\n")
-    if response_str.endswith("\n"):
-        response_str = response_str.removesuffix("\n")
-    if response_str.endswith("```"):
-        response_str = response_str.removesuffix("```")
+    response_str: str = response.text.strip()
+    if "</think>" in response_str:
+        response_str = response_str.split("</think>")[1].strip()
 
+    response_str = re.findall(r"```(?:\w+)?\n(.*?)\n```", response_str, re.DOTALL)
+    response_str = "\n".join(response_str).strip()
     return OpenAIResponse(response_str, response.finish_reason, response.success)
 
 
@@ -563,7 +564,7 @@ def post_process_adjust_indentation(indentation_level, response):
 
     response_str = response.text
 
-    if response_str == None:
+    if response_str is None:
         return response
     # split the prompt_str into lines
     lines = response_str.split("\n")
