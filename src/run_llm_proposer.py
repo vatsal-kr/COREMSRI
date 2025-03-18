@@ -67,7 +67,7 @@ def fix(
     # assert input args
     assert len(n) == len(temperature)
 
-    if not openai:
+    if not openai and not dry_run:
         llm = LLM(
             model,
             tensor_parallel_size=torch.cuda.device_count(),
@@ -128,7 +128,7 @@ def fix(
 
         # check if the outputs have already been computed
         query_output_dir = Path(Target_folder) / query_folderName
-        if not overwrite and query_output_dir.exists():
+        if not overwrite and not dry_run and query_output_dir.exists():
             total_outputs_per_file = sum(n)
             for fname in file_names:
                 if len(list(query_output_dir.rglob(f"{fname.split('.')[0]}*{file_extensions[lang]}"))) < total_outputs_per_file:
@@ -235,93 +235,95 @@ def fix(
         total_prompts = [each_prompt for _, file_prompt in file_prompt_map.items() for each_prompt in file_prompt]
 
         total_generations = 0
-        for n_idx, temp_idx in zip(n, temperature):
-            model_config = {
-                "openai": openai,
-                "api_key": api_key,
-                "api_type": api_type,
-                "api_version": api_version,
-                "api_base": api_base,
-                "model": model,
-                "temperature": temp_idx,
-                "n": n_idx,
-                "retry_timeout": timeout,
-                "max_retry_attempts": max_attempts,
-                "system_message": system_message,
-                "max_tokens": max_tokens,
-                "max_model_len": max_model_len,
-                "seed": seed,
-            }
+        if not dry_run:
+            for n_idx, temp_idx in zip(n, temperature):
+                model_config = {
+                    "openai": openai,
+                    "api_key": api_key,
+                    "api_type": api_type,
+                    "api_version": api_version,
+                    "api_base": api_base,
+                    "model": model,
+                    "temperature": temp_idx,
+                    "n": n_idx,
+                    "retry_timeout": timeout,
+                    "max_retry_attempts": max_attempts,
+                    "system_message": system_message,
+                    "max_tokens": max_tokens,
+                    "max_model_len": max_model_len,
+                    "seed": seed,
+                }
 
-            model_handler = OpenAIHandler(config=model_config) if model_config["openai"] else LLMHandler(config=model_config, llm=llm)
-            original_responses = model_handler.get_responses([p.value for p in total_prompts])
+                model_handler = OpenAIHandler(config=model_config) if model_config["openai"] else LLMHandler(config=model_config, llm=llm)
+                original_responses = model_handler.get_responses([p.value for p in total_prompts])
 
-            file_response_map = {}
-            response_idx = 0
-            for file_name, file_prompts in file_prompt_map.items():
-                file_response_map[file_name] = original_responses[response_idx : response_idx + len(file_prompts)]
-                response_idx += len(file_prompts)
-            assert len(file_prompt_map) == len(file_response_map)
-            assert all(len(prompts_sent) == len(responses_received) for prompts_sent, responses_received in zip(file_prompt_map.values(), file_response_map.values()))
+                file_response_map = {}
+                response_idx = 0
+                for file_name, file_prompts in file_prompt_map.items():
+                    file_response_map[file_name] = original_responses[response_idx : response_idx + len(file_prompts)]
+                    response_idx += len(file_prompts)
+                assert len(file_prompt_map) == len(file_response_map)
+                assert all(len(prompts_sent) == len(responses_received) for prompts_sent, responses_received in zip(file_prompt_map.values(), file_response_map.values()))
 
-            for file_name, file_responses in file_response_map.items():
-                all_prompts_T = file_prompt_map[file_name]
-                # file responses should be a list[list[OpenaiResponse]]
-                if not isinstance(file_responses, list):
-                    file_responses = [file_responses]
-                for i, response in enumerate(file_responses):
-                    if not isinstance(response, list):
-                        file_responses[i] = [response]
+                for file_name, file_responses in file_response_map.items():
+                    all_prompts_T = file_prompt_map[file_name]
+                    # file responses should be a list[list[OpenaiResponse]]
+                    if not isinstance(file_responses, list):
+                        file_responses = [file_responses]
+                    for i, response in enumerate(file_responses):
+                        if not isinstance(response, list):
+                            file_responses[i] = [response]
 
-                if not isinstance(all_prompts_T, list):
-                    all_prompts_T = [all_prompts_T]
-                assert isinstance(file_responses, list) and isinstance(file_responses[0], list) and isinstance(file_responses[0][0], OpenAIResponse)
+                    if not isinstance(all_prompts_T, list):
+                        all_prompts_T = [all_prompts_T]
+                    assert isinstance(file_responses, list) and isinstance(file_responses[0], list) and isinstance(file_responses[0][0], OpenAIResponse)
 
-                post_process_responses = copy.deepcopy(file_responses)
-                for i, responses in enumerate(file_responses):
-                    indentation_level = all_prompts_T[i // n_idx].metadata["indentation_level"]
-                    for j, response in enumerate(responses):
-                        response = sanitize_llm_response(response)
-                        if all_prompts_T[i // n_idx].metadata["source_example"][4] == "method_block":
-                            response = post_process_adjust_indentation(indentation_level, response)
-                        post_process_responses[i][j] = response
-                seq_responses = list(zip(*post_process_responses))
-                for i, responses in enumerate(seq_responses):
-                    file_name_new = file_name.split(".")[0]
-                    output_idx = str(i + total_generations)
-                    target_file_name = f"{file_name_new}_{output_idx}" + file_extensions[lang]
-                    target_file_path = query_output_dir / target_file_name
-                    Logger = Log(query_output_log_dir, f"{target_file_name}_logs")
-                    record = {
-                        "File": file_name,
-                        "Query": query_id,
-                        "Results": [(p.value, r, p.metadata["source_example"]) for p, r in zip(all_prompts_T, responses)],
-                    }
-                    Logger.create_logs(record, model_config)
+                    post_process_responses = copy.deepcopy(file_responses)
+                    for i, responses in enumerate(file_responses):
+                        indentation_level = all_prompts_T[i // n_idx].metadata["indentation_level"]
+                        for j, response in enumerate(responses):
+                            response = sanitize_llm_response(response)
+                            if all_prompts_T[i // n_idx].metadata["source_example"][4] == "method_block":
+                                response = post_process_adjust_indentation(indentation_level, response)
+                            post_process_responses[i][j] = response
+                    seq_responses = list(zip(*post_process_responses))
+                    for i, responses in enumerate(seq_responses):
+                        file_name_new = file_name.split(".")[0]
+                        output_idx = str(i + total_generations)
+                        target_file_name = f"{file_name_new}_{output_idx}" + file_extensions[lang]
+                        target_file_path = query_output_dir / target_file_name
+                        Logger = Log(query_output_log_dir, f"{target_file_name}_logs")
+                        record = {
+                            "File": file_name,
+                            "Query": query_id,
+                            "Results": [(p.value, r, p.metadata["source_example"]) for p, r in zip(all_prompts_T, responses)],
+                        }
+                        Logger.create_logs(record, model_config)
 
-                    patch_fixer = Patcher()
-                    lines_updated = copy.deepcopy(file_lines)
-                    adjustment = 0
+                        patch_fixer = Patcher()
+                        lines_updated = copy.deepcopy(file_lines)
+                        adjustment = 0
 
-                    for prompt, response in zip(all_prompts_T, responses):
-                        example = prompt.metadata["source_example"]
-                        final_response_text = [response.text if response.success else "".join(file_lines[example[2][0] + adjustment : example[2][1] + 1 + adjustment])]  # type: ignore
-                        lines_updated, adjustment_new = patch_fixer.stitch(
-                            final_response_text,
-                            lines_updated,
-                            list(
-                                range(
-                                    example[2][0] + adjustment,
-                                    example[2][1] + 1 + adjustment,
-                                )
-                            ),
-                        )
-                        adjustment += adjustment_new
+                        for prompt, response in zip(all_prompts_T, responses):
+                            example = prompt.metadata["source_example"]
+                            final_response_text = [response.text if response.success else "".join(file_lines[example[2][0] + adjustment : example[2][1] + 1 + adjustment])]  # type: ignore
+                            lines_updated, adjustment_new = patch_fixer.stitch(
+                                final_response_text,
+                                lines_updated,
+                                list(
+                                    range(
+                                        example[2][0] + adjustment,
+                                        example[2][1] + 1 + adjustment,
+                                    )
+                                ),
+                            )
+                            adjustment += adjustment_new
 
-                    with open(target_file_path, "w", encoding="utf-8") as f:
-                        f.write("\n".join(lines_updated))
-            total_generations += n_idx
-
+                        with open(target_file_path, "w", encoding="utf-8") as f:
+                            f.write("\n".join(lines_updated))
+                total_generations += n_idx
+        else:
+            logging.debug("Dry run mode. Skipping generation.")
         split_type_data[query_id] = split_type_buckets
         torch.cuda.empty_cache()
         gc.collect()
