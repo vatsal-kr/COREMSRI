@@ -158,10 +158,11 @@ class OpenAIHandler:
                 "timestamp": [datetime.now().strftime("%Y-%m-%d")],
             }
         )
+        save_path = Path(__file__).parent / "openai_costs.csv"
         df.to_csv(
-            "openai_costs.csv",
+            save_path,
             mode="a",
-            header=Path(__file__).parent / "openai_costs.csv",
+            header=not save_path.exists(),
             index=False,
         )
         return responses
