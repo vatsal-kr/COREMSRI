@@ -78,7 +78,8 @@ def verify_files(
         query_metadata = json.load(f)
 
     query_list = queries if queries is not None else query_metadata.keys()
-    for query_id in tqdm(query_list):
+    for i, query_id in tqdm(enumerate(query_list), total=len(query_list)):
+        logging.warning(f"Processing Query {i}/{len(query_list)}: {query_id}")
         query_data = query_metadata[query_id]
 
         query_folderName = query_data["folder_name"]
@@ -91,10 +92,9 @@ def verify_files(
 
         os.makedirs(f"{output_log_dir}/{query_folderName}", exist_ok=True)
         prompt_diffs.sort()
-        logging.info("Query: {}    prompts: {}".format(query_id, len(prompt_diffs)))
-
-        all_prompts_for_query = []
-        for diff_file in tqdm(prompt_diffs):
+        logging.warning("Query: {}, prompts: {}".format(query_id, len(prompt_diffs)))
+        all_prompts_for_query, response_diff_files = [], []
+        for diff_file in tqdm(prompt_diffs, desc="Processing prompts", total=len(prompt_diffs)):
             query_output_dir = f"{output_log_dir}/{query_folderName}"
 
             Logger = Log(query_output_dir, diff_file.split(".")[0] + "_logs")
@@ -124,18 +124,23 @@ def verify_files(
             logging.info(f"Diff: {diff_file} Prompt-len: {count_tokens(prompt, model_name=model)[0]}")
 
             assert isinstance(prompt, str)
-
             # call model
             if dry_run is True:
                 continue
-            # if overwrite is False:
-            #     if os.path.exists(os.path.join(query_output_dir, diff_file.split(".")[0] + "_logs.log")):
-            #         logging.warning("Skipping: {} Prompt-len: {}".format(diff_file, count_tokens(prompt, model_name=model)[0]))
-            #         continue
+            if overwrite is False:
+                if os.path.exists(os.path.join(query_output_dir, diff_file.split(".")[0] + "_logs.log")):
+                    logging.warning("Skipping: {} Prompt-len: {}".format(diff_file, count_tokens(prompt, model_name=model)[0]))
+                    continue
             all_prompts_for_query.append(prompt)
+            response_diff_files.append(diff_file)
+
         responses = model_handler.get_responses(all_prompts_for_query)
 
-        for response in responses:
+        assert len(responses) == len(prompt_diffs)
+
+        for response, diff_file in zip(responses, response_diff_files):
+            query_output_dir = f"{output_log_dir}/{query_folderName}"
+            Logger = Log(query_output_dir, diff_file.split(".")[0] + "_logs")
             try:
                 record = {
                     "File": diff_file,
